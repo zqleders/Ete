@@ -25,25 +25,17 @@ def send_telegram(msg, image_path=None):
     except: pass
 
 def handle_privacy_consent(driver):
-    """检测并处理隐私对话框：如果存在，点击后等待消失"""
+    """专门处理 fc-consent-root 隐私弹窗的逻辑"""
     try:
-        # 定义可能的选择器
-        privacy_selectors = [
-            "//button[contains(text(), 'Do not consent')]",
-            "//button[contains(text(), 'Reject')]",
-            "//button[contains(text(), 'Close')]",
-            "//button[contains(text(), 'Accept')]"
-        ]
-        for selector in privacy_selectors:
-            elements = driver.find_elements(By.XPATH, selector)
-            for el in elements:
-                if el.is_displayed():
-                    print(f"检测到隐私对话框，尝试点击: {el.text}")
-                    el.click()
-                    time.sleep(2) # 等待弹窗消失
-                    return True
-    except:
-        pass
+        # 使用 CSS 选择器直接定位“同意”按钮
+        consent_btn = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
+        if consent_btn and consent_btn[0].is_displayed():
+            print("检测到隐私对话框，点击“同意”按钮...")
+            driver.execute_script("arguments[0].click();", consent_btn[0])
+            time.sleep(3) # 等待遮罩层完全移除
+            return True
+    except Exception as e:
+        print(f"处理隐私弹窗时发生异常: {e}")
     return False
 
 def run_browser():
@@ -63,8 +55,8 @@ def run_browser():
     try:
         # 1. 登录流程
         driver.get("https://eternalzero.cloud/login")
-        time.sleep(8) # 强制停留，等待弹窗加载
-        handle_privacy_consent(driver) # 检测并处理
+        time.sleep(10) # 给弹窗弹出留足时间
+        handle_privacy_consent(driver)
         
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
