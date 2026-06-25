@@ -67,11 +67,16 @@ def handle_all_tasks(driver):
         print("发现广告，开始观看...")
         driver.execute_script("arguments[0].click();", ad_btns[0])
         time.sleep(30) # 强制等待广告完成
-        close_btn = driver.find_elements(By.ID, "dismiss-button-element")
-        if close_btn: 
-            driver.execute_script("arguments[0].click();", close_btn[0])
-            print("广告已关闭。")
+        
+        # 修复：确保关闭按钮被点击
+        try:
+            close_btn = driver.find_element(By.ID, "dismiss-button-element")
+            if close_btn.is_displayed():
+                driver.execute_script("arguments[0].click();", close_btn)
+                print("已执行点击关闭广告按钮。")
             time.sleep(2)
+        except Exception as e:
+            print(f"关闭广告按钮点击失败: {e}")
             
     # 3. 处理人机验证
     solve_hcaptcha(driver)
