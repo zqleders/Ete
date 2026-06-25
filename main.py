@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-import json
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -25,65 +24,53 @@ def send_telegram(msg, image_path=None):
                 requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
     except: pass
 
-def robust_clear_popups(driver):
-    """最强清理：循环监控并消除遮罩"""
-    # 执行一段 JS 脚本，在页面内持续监测并自动点击拒绝
-    driver.execute_script("""
-        function clearAll() {
-            // 尝试点击所有带有“拒绝”意义的按钮
+def light_clear(driver):
+    """精简版清理：不再使用监听，只进行一次性清理"""
+    try:
+        driver.execute_script("""
             var buttons = document.querySelectorAll('button');
             buttons.forEach(function(btn) {
-                if (btn.innerText.match(/Do not consent|Reject|Close|Manage options/i)) {
-                    btn.click();
-                }
+                if (btn.innerText.match(/Do not consent|Reject|Close/i)) btn.click();
             });
-            // 暴力隐藏所有遮罩层
-            var masks = document.querySelectorAll('.fc-dialog-overlay, .modal-backdrop, .overlay, #privacy-modal');
+            var masks = document.querySelectorAll('.fc-dialog-overlay, .modal-backdrop');
             masks.forEach(function(m) { m.style.display = 'none'; });
             document.body.style.overflow = 'auto';
-        }
-        // 执行一次
-        clearAll();
-        // 绑定到页面变化事件，确保后面跳出的也能被干掉
-        window.addEventListener('DOMNodeInserted', clearAll);
-    """)
+        """)
+    except: pass
 
 def run_browser():
     chrome_options = Options()
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
-    chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("--window-size=1280,720") # 调低分辨率以节省内存
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
+    chrome_options.add_argument("--disable-gpu") # 额外优化
     chrome_options.add_argument("--disable-dev-shm-usage")
     
     driver = webdriver.Chrome(options=chrome_options)
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 15)
 
     try:
-        # 1. 登录
         driver.get("https://eternalzero.cloud/login")
-        robust_clear_popups(driver) # 开启监控
         time.sleep(3)
+        light_clear(driver)
         
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
 
-        # 2. 详情页
         driver.get("https://eternalzero.cloud/servers/5541/info")
         time.sleep(5) 
-        robust_clear_popups(driver) # 确保遮罩不挡住按钮
+        light_clear(driver)
         
-        # 处理 hCaptcha
+        # hCaptcha 逻辑
         if "h-captcha" in driver.page_source:
-            print("发现验证码，准备调用 API...")
             sitekey = driver.execute_script('return document.querySelector(".h-captcha").getAttribute("data-sitekey")')
             resp = requests.post("https://api.nopecha.com/v1", json={"key": NOPECHA_KEY, "type": "hcaptcha", "sitekey": sitekey, "url": driver.current_url}).json()
             if resp.get('status') == 'success':
                 driver.execute_script(f'document.querySelector("[name=h-captcha-response]").value = "{resp["data"]}";')
                 driver.execute_script('hcaptcha.execute();')
         
-        # 3. 触发续费
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
