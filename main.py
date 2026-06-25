@@ -24,19 +24,31 @@ def send_telegram(msg, image_path=None):
                 requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
     except: pass
 
-def handle_privacy_consent(driver):
-    """专门处理 fc-consent-root 隐私弹窗的逻辑"""
+def handle_unexpected_popups(driver):
+    """同时监测隐私弹窗和广告弹窗并进行处理"""
     try:
-        # 使用 CSS 选择器直接定位“同意”按钮
-        consent_btn = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
-        if consent_btn and consent_btn[0].is_displayed():
-            print("检测到隐私对话框，点击“同意”按钮...")
-            driver.execute_script("arguments[0].click();", consent_btn[0])
-            time.sleep(3) # 等待遮罩层完全移除
-            return True
+        # 1. 监测隐私弹窗
+        consent_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
+        for btn in consent_btns:
+            if btn.is_displayed():
+                print("检测到隐私对话框，点击同意...")
+                driver.execute_script("arguments[0].click();", btn)
+                time.sleep(2)
+        
+        # 2. 监测激励广告按钮
+        ad_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-rewarded-ad-button")
+        for btn in ad_btns:
+            if btn.is_displayed():
+                print("检测到观看广告选项，点击并播放...")
+                driver.execute_script("arguments[0].click();", btn)
+                time.sleep(8) # 等待广告播放
+                # 点击关闭按钮
+                close_btn = driver.find_element(By.ID, "dismiss-button-element")
+                if close_btn.is_displayed():
+                    driver.execute_script("arguments[0].click();", close_btn)
+                    time.sleep(2)
     except Exception as e:
-        print(f"处理隐私弹窗时发生异常: {e}")
-    return False
+        print(f"弹窗处理检测逻辑运行: {e}")
 
 def run_browser():
     chrome_options = Options()
@@ -53,10 +65,10 @@ def run_browser():
     wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 登录流程
+        # 1. 登录前处理
         driver.get("https://eternalzero.cloud/login")
-        time.sleep(10) # 给弹窗弹出留足时间
-        handle_privacy_consent(driver)
+        time.sleep(10)
+        handle_unexpected_popups(driver)
         
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
@@ -68,8 +80,8 @@ def run_browser():
         print("等待详情页渲染...")
         time.sleep(15) 
         
-        # 再次检测，防止跳出新的隐私框
-        handle_privacy_consent(driver)
+        # 再次检测，防止广告在后续步骤跳出
+        handle_unexpected_popups(driver)
         
         # 3. 验证人机状态
         print("检测人机验证状态...")
