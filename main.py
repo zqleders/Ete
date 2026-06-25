@@ -18,11 +18,15 @@ def send_telegram(msg, image_path=None):
     if not TELEGRAM_BOT_TOKEN: return
     base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
     try:
+        # 发送文本
         requests.post(f"{base_url}sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
+        # 发送图片
         if image_path and os.path.exists(image_path):
             with open(image_path, 'rb') as f:
-                requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID, "files": {"photo": f}})
-    except: pass
+                # 修复：这里的 files 参数已正确放在 post 请求中
+                requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
+    except Exception as e:
+        print(f"Telegram 发送失败: {e}")
 
 def handle_unexpected_popups(driver):
     """监测隐私弹窗和广告并自动处理"""
@@ -42,7 +46,7 @@ def handle_unexpected_popups(driver):
                 print("检测到观看广告，开始播放...")
                 driver.execute_script("arguments[0].click();", btn)
                 
-                # 强制等待 30 秒，确保广告播完
+                # 强制等待 30 秒
                 print("已点击广告，强制等待 30 秒...")
                 time.sleep(30) 
                 
@@ -59,8 +63,6 @@ def handle_unexpected_popups(driver):
 
 def run_browser():
     chrome_options = Options()
-    # 窗口位置记录与设置
-    chrome_options.add_argument("--window-position=0,0") 
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
     chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
     chrome_options.add_argument("--window-size=1920,1080")
@@ -89,7 +91,6 @@ def run_browser():
         print("等待详情页渲染...")
         time.sleep(15) 
         
-        # 再次检测，防止广告跳出
         handle_unexpected_popups(driver)
         
         # 3. 验证人机状态
@@ -105,9 +106,8 @@ def run_browser():
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
+        # 截图操作
         time.sleep(5)
-        total_height = driver.execute_script("return document.body.scrollHeight")
-        driver.set_window_size(1920, total_height)
         driver.save_screenshot("result.png")
         send_telegram("✅ 操作尝试完成。", "result.png")
 
