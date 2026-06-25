@@ -6,7 +6,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium_stealth import stealth # 需要安装 selenium-stealth
+from selenium_stealth import stealth
 
 # 获取环境配置
 EMAIL = os.environ.get("EMAIL")
@@ -26,18 +26,19 @@ def send_telegram(msg, image_path=None):
 
 def run_browser():
     chrome_options = Options()
-    # 你的代理
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
-    # 加载本地插件目录
     chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
+    chrome_options.add_argument("--lang=en-US")
+    chrome_options.add_argument("--timezone=America/New_York")
     
     driver = webdriver.Chrome(options=chrome_options)
     
-    # 使用 stealth 隐藏自动化特征
+    # 伪装自动化特征
     stealth(driver,
             languages=["en-US", "en"],
             vendor="Google Inc.",
@@ -50,31 +51,37 @@ def run_browser():
     wait = WebDriverWait(driver, 20)
 
     try:
+        # 1. 预先注入 Cookie 绕过隐私弹窗
+        driver.get("https://eternalzero.cloud/")
+        driver.add_cookie({'name': 'cookies_accepted', 'value': 'true', 'domain': '.eternalzero.cloud'})
+        driver.add_cookie({'name': 'notice_gdpr_prefs', 'value': '0:1', 'domain': '.eternalzero.cloud'})
+        
+        # 2. 登录流程
         driver.get("https://eternalzero.cloud/login")
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
 
+        # 3. 详情页处理
         driver.get("https://eternalzero.cloud/servers/5541/info")
-        print("等待页面加载，并给 NopeCHA 插件预留 15 秒初始化...")
-        time.sleep(15) # 插件必须有足够时间在无头模式下完成握手
+        print("等待页面加载...")
+        time.sleep(15) # 给插件初始化和页面渲染留出时间
         
-        # 强制清除遮罩，防止插件点击被拦截
-        driver.execute_script("document.querySelectorAll('.fc-dialog-overlay').forEach(e => e.style.display='none')")
+        # 强制清理残留遮罩
+        driver.execute_script("document.querySelectorAll('.fc-dialog-overlay, .modal-backdrop').forEach(e => e.style.display='none')")
         
-        # 显式查找验证码容器并尝试唤醒插件
+        # 4. 人机验证与点击
         if "h-captcha" in driver.page_source:
             captcha_box = driver.find_element(By.CSS_SELECTOR, ".h-captcha")
             driver.execute_script("arguments[0].scrollIntoView();", captcha_box)
-            print("已定位验证码，等待插件自动操作...")
-            time.sleep(10) # 等待插件完成验证
+            print("等待插件自动处理验证...")
+            time.sleep(10)
 
-        # 执行点击
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
         time.sleep(5)
-        # 获取完整高度并截图
+        # 动态调整截图高度
         total_height = driver.execute_script("return document.body.scrollHeight")
         driver.set_window_size(1920, total_height)
         driver.save_screenshot("result.png")
