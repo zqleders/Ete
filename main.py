@@ -24,6 +24,28 @@ def send_telegram(msg, image_path=None):
                 requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
     except: pass
 
+def handle_privacy_consent(driver):
+    """检测并处理隐私对话框：如果存在，点击后等待消失"""
+    try:
+        # 定义可能的选择器
+        privacy_selectors = [
+            "//button[contains(text(), 'Do not consent')]",
+            "//button[contains(text(), 'Reject')]",
+            "//button[contains(text(), 'Close')]",
+            "//button[contains(text(), 'Accept')]"
+        ]
+        for selector in privacy_selectors:
+            elements = driver.find_elements(By.XPATH, selector)
+            for el in elements:
+                if el.is_displayed():
+                    print(f"检测到隐私对话框，尝试点击: {el.text}")
+                    el.click()
+                    time.sleep(2) # 等待弹窗消失
+                    return True
+    except:
+        pass
+    return False
+
 def run_browser():
     chrome_options = Options()
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
@@ -39,30 +61,32 @@ def run_browser():
     wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 登录
+        # 1. 登录流程
         driver.get("https://eternalzero.cloud/login")
+        time.sleep(8) # 强制停留，等待弹窗加载
+        handle_privacy_consent(driver) # 检测并处理
+        
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
+        time.sleep(5)
 
-        # 2. 详情页
+        # 2. 详情页处理
         driver.get("https://eternalzero.cloud/servers/5541/info")
-        print("等待页面渲染...")
+        print("等待详情页渲染...")
         time.sleep(15) 
         
-        # 3. 轮询检测验证码是否已完成
-        # 插件完成验证后，页面通常会向 textarea 写入一个 response 字符串
+        # 再次检测，防止跳出新的隐私框
+        handle_privacy_consent(driver)
+        
+        # 3. 验证人机状态
         print("检测人机验证状态...")
-        max_retries = 10
-        for i in range(max_retries):
-            # 检查是否有隐藏的 response 字段被填充
+        for i in range(10):
             response_field = driver.execute_script('return document.querySelector("[name=h-captcha-response]").value')
             if response_field and len(response_field) > 10:
-                print("验证码已自动通过！")
+                print("验证码已通过")
                 break
-            else:
-                print(f"等待验证码填充中... ({i+1}/{max_retries})")
-                time.sleep(5)
+            time.sleep(5)
         
         # 4. 点击续费
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
