@@ -21,54 +21,71 @@ def send_telegram(msg, image_path=None):
             requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
 
 def handle_privacy_popup(driver, wait):
-    """检测并点击隐私弹窗的通用函数"""
+    """检测并移除隐私弹窗及覆盖层"""
+    # 1. 尝试点击弹窗按钮
     try:
-        # 等待弹窗出现，设置极短超时时间以避免拖慢流程
         popup_wait = WebDriverWait(driver, 5)
-        do_not_consent_btn = popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Do not consent')]")))
-        do_not_consent_btn.click()
+        btn = popup_wait.until(EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Do not consent')]")))
+        btn.click()
         print("检测到隐私弹窗，已点击 Do not consent")
-        time.sleep(1) # 点击后等待弹窗消失
+        time.sleep(1)
     except:
-        pass # 没找到弹窗则忽略
+        pass
+    
+    # 2. 强制移除任何潜在的覆盖层遮罩
+    try:
+        driver.execute_script("""
+            var overlay = document.querySelector('.fc-dialog-overlay');
+            if (overlay) overlay.style.display = 'none';
+            var dialog = document.querySelector('.fc-dialog-container');
+            if (dialog) dialog.style.display = 'none';
+            document.body.style.overflow = 'auto';
+        """)
+    except:
+        pass
 
 def run_browser():
     chrome_options = Options()
+    # 代理设置
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
+    # 加载本地插件
     chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
-    chrome_options.add_argument("--window-size=1920,1080") # 高清分辨率
+    # 高清分辨率与无头模式
+    chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
     driver = webdriver.Chrome(options=chrome_options)
+    driver.maximize_window()
     wait = WebDriverWait(driver, 25)
 
     try:
-        # 1. 访问登录页
+        # 1. 登录流程
         driver.get("https://eternalzero.cloud/login")
-        handle_privacy_popup(driver, wait) # 首次加载检测
+        handle_privacy_popup(driver, wait)
         
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
 
-        # 2. 访问服务器列表
+        # 2. 列表页处理
         driver.get("https://eternalzero.cloud/servers/list")
-        handle_privacy_popup(driver, wait) # 页面跳转后再次检测
+        handle_privacy_popup(driver, wait)
         
         if "5541" not in driver.page_source:
             raise Exception("登录成功但未在列表中发现服务器 5541")
 
-        # 3. 访问续费页
+        # 3. 详情页处理 (Renew 操作)
         driver.get("https://eternalzero.cloud/servers/5541/info")
-        handle_privacy_popup(driver, wait) # 页面跳转后再次检测
+        handle_privacy_popup(driver, wait)
         
-        renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
-        renew_btn.click()
+        # 使用 JS 强制点击，确保绕过遮罩
+        renew_btn = wait.until(EC.presence_of_element_located((By.ID, "renew-button")))
+        driver.execute_script("arguments[0].click();", renew_btn)
         
         time.sleep(5)
-        # 获取页面完整高度并调整窗口以截图完整信息
+        # 获取完整页面并截图
         total_height = driver.execute_script("return document.body.scrollHeight")
         driver.set_window_size(1920, total_height)
         driver.save_screenshot("result.png")
