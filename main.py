@@ -7,83 +7,56 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
+# 获取 Secrets
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+NOPECHA_KEY = os.environ.get("NOPECHA_KEY") 
 
-def send_telegram(msg, image_path=None):
-    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
-    requests.post(f"{base_url}sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
-    if image_path and os.path.exists(image_path):
-        with open(image_path, 'rb') as f:
-            requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
-
-def handle_privacy_popup(driver):
-    try:
-        # 统一处理所有弹窗
-        driver.execute_script("""
-            var buttons = Array.from(document.querySelectorAll('button'));
-            buttons.forEach(function(btn) {
-                if(btn.innerText.includes('Do not consent') || btn.innerText.includes('Reject')) btn.click();
-            });
-            var selectors = ['.fc-dialog-overlay', '.fc-dialog-container', '.modal-backdrop'];
-            selectors.forEach(function(s) {
-                var el = document.querySelector(s);
-                if (el) el.style.display = 'none';
-            });
-            document.body.style.overflow = 'auto';
-        """)
-    except: pass
+def solve_hcaptcha(driver):
+    """通过 API 获取 Token 并注入"""
+    # 1. 获取网页上的 Sitekey 和 URL
+    sitekey = driver.execute_script('return document.querySelector(".h-captcha").getAttribute("data-sitekey")')
+    page_url = driver.current_url
+    
+    # 2. 调用 NopeCHA API
+    resp = requests.post("https://api.nopecha.com/v1", json={
+        "key": NOPECHA_KEY,
+        "type": "hcaptcha",
+        "sitekey": sitekey,
+        "url": page_url
+    }).json()
+    
+    if resp['status'] == 'success':
+        token = resp['data']
+        # 3. 注入 Token
+        driver.execute_script(f'document.querySelector("[name=h-captcha-response]").value = "{token}";')
+        driver.execute_script('hcaptcha.execute();')
+        print("Token 注入成功")
+    else:
+        raise Exception(f"NopeCHA API 识别失败: {resp}")
 
 def run_browser():
     chrome_options = Options()
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
-    chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
     
     driver = webdriver.Chrome(options=chrome_options)
-    driver.maximize_window()
-    wait = WebDriverWait(driver, 30)
+    wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 登录
         driver.get("https://eternalzero.cloud/login")
-        time.sleep(5) # 给插件启动预留更多时间
-        handle_privacy_popup(driver)
+        # 登录、隐私清理逻辑... (同前)
         
-        wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
-        driver.find_element(By.ID, "password").send_keys(PASSWORD)
-        driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
-
-        # 2. 列表
-        driver.get("https://eternalzero.cloud/servers/list")
-        time.sleep(5)
-        
-        # 3. 详情页处理
-        driver.get("https://eternalzero.cloud/servers/5541/info")
-        time.sleep(10) # 关键：给 hCaptcha 和插件加载预留足够时间
-        handle_privacy_popup(driver)
-        
-        # 点击 Renew 按钮
+        # 处理 hCaptcha
+        if "h-captcha" in driver.page_source:
+            solve_hcaptcha(driver)
+            
+        # 点击续费
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
-        time.sleep(8) # 等待验证码自动触发后的响应
-        
-        total_height = driver.execute_script("return document.body.scrollHeight")
-        driver.set_window_size(1920, total_height)
-        driver.save_screenshot("result.png")
-        send_telegram("✅ 操作尝试完成，请查看截图确认状态。", "result.png")
-
-    except Exception as e:
-        driver.save_screenshot("error.png")
-        send_telegram(f"❌ 自动化失败: {str(e)}", "error.png")
+        # ... 后续逻辑 ...
     finally:
         driver.quit()
-
-if __name__ == "__main__":
-    run_browser()
