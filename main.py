@@ -8,112 +8,91 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium_stealth import stealth
 
-# 获取环境配置
+# 配置
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+NOPECHA_KEY = os.environ.get("NOPECHA_KEY") 
 
-def send_telegram(msg, image_path=None):
-    if not TELEGRAM_BOT_TOKEN: return
-    base_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/"
-    try:
-        # 发送文本
-        requests.post(f"{base_url}sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
-        # 发送图片
-        if image_path and os.path.exists(image_path):
-            with open(image_path, 'rb') as f:
-                # 修复：这里的 files 参数已正确放在 post 请求中
-                requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
-    except Exception as e:
-        print(f"Telegram 发送失败: {e}")
+def get_captcha_token(sitekey, url):
+    """根据官方文档使用 GET/POST 配合获取 Token"""
+    # 1. 提交任务
+    submit_url = "https://api.nopecha.com/v1/solve"
+    payload = {
+        "key": NOPECHA_KEY,
+        "type": "hcaptcha",
+        "sitekey": sitekey,
+        "url": url,
+    }
+    resp = requests.post(submit_url, json=payload)
+    if resp.status_code != 200: return None
+    task_id = resp.json().get("data")
+    
+    # 2. 轮询获取结果 (文档规范)
+    result_url = f"https://api.nopecha.com/v1/status?key={NOPECHA_KEY}&id={task_id}"
+    for _ in range(20): # 等待约 60 秒
+        time.sleep(3)
+        res = requests.get(result_url).json()
+        if res.get("status") == "solved":
+            return res.get("data")
+    return None
 
-def handle_unexpected_popups(driver):
-    """监测隐私弹窗和广告并自动处理"""
-    try:
-        # 1. 监测隐私弹窗
-        consent_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
-        for btn in consent_btns:
-            if btn.is_displayed():
-                print("检测到隐私对话框，点击同意...")
-                driver.execute_script("arguments[0].click();", btn)
-                time.sleep(2)
+def clear_all_ads(driver):
+    """循环清理所有弹窗和广告"""
+    print("清理页面广告中...")
+    for _ in range(5):
+        # 处理隐私弹窗
+        btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
+        if btns and btns[0].is_displayed():
+            driver.execute_script("arguments[0].click();", btns[0])
+            time.sleep(1)
         
-        # 2. 监测激励广告按钮
+        # 处理激励广告
         ad_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-rewarded-ad-button")
-        for btn in ad_btns:
-            if btn.is_displayed():
-                print("检测到观看广告，开始播放...")
-                driver.execute_script("arguments[0].click();", btn)
-                
-                # 强制等待 30 秒
-                print("已点击广告，强制等待 30 秒...")
-                time.sleep(30) 
-                
-                # 点击关闭按钮
-                try:
-                    close_btn = driver.find_element(By.ID, "dismiss-button-element")
-                    driver.execute_script("arguments[0].click();", close_btn)
-                    print("已点击关闭按钮。")
-                except:
-                    print("未找到关闭按钮，跳过。")
-                time.sleep(2)
-    except Exception as e:
-        print(f"弹窗处理逻辑报错: {e}")
+        if ad_btns and ad_btns[0].is_displayed():
+            driver.execute_script("arguments[0].click();", ad_btns[0])
+            time.sleep(30) # 强制等待广告完成
+            close = driver.find_elements(By.ID, "dismiss-button-element")
+            if close: driver.execute_script("arguments[0].click();", close[0])
+            time.sleep(2)
+        else:
+            break
 
 def run_browser():
     chrome_options = Options()
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
-    chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
     chrome_options.add_argument("--window-size=1920,1080")
     chrome_options.add_argument("--headless=new")
-    chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")
-    chrome_options.add_argument("--lang=en-US")
     
     driver = webdriver.Chrome(options=chrome_options)
     stealth(driver, languages=["en-US", "en"], vendor="Google Inc.", platform="Win32", fix_hairline=True)
-    wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 登录流程
-        driver.get("https://eternalzero.cloud/login")
-        time.sleep(10)
-        handle_unexpected_popups(driver)
-        
-        wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
-        driver.find_element(By.ID, "password").send_keys(PASSWORD)
-        driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
-        time.sleep(5)
-
-        # 2. 详情页处理
         driver.get("https://eternalzero.cloud/servers/5541/info")
-        print("等待详情页渲染...")
-        time.sleep(15) 
+        # 1. 先去广告
+        clear_all_ads(driver)
         
-        handle_unexpected_popups(driver)
+        # 2. 提取并解决验证码
+        captcha_el = driver.find_element(By.CLASS_NAME, "h-captcha")
+        sitekey = captcha_el.get_attribute("data-sitekey")
         
-        # 3. 验证人机状态
-        print("检测人机验证状态...")
-        for i in range(10):
-            response_field = driver.execute_script('return document.querySelector("[name=h-captcha-response]").value')
-            if response_field and len(response_field) > 10:
-                print("验证码已通过")
-                break
-            time.sleep(5)
+        print("正在调用 NopeCHA API 获取验证结果...")
+        token = get_captcha_token(sitekey, driver.current_url)
         
-        # 4. 点击续费
-        renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
-        driver.execute_script("arguments[0].click();", renew_btn)
+        if token:
+            # 注入 Token
+            driver.execute_script(f'document.querySelector("[name=h-captcha-response]").value = "{token}";')
+            # 触发提交
+            driver.execute_script("hcaptcha.execute();") 
+            print("验证码已注入并提交。")
         
-        # 截图操作
+        # 3. 点击续费
+        renew_btn = WebDriverWait(driver, 10).until(EC.element_to_be_clickable((By.ID, "renew-button")))
+        renew_btn.click()
+        
         time.sleep(5)
         driver.save_screenshot("result.png")
-        send_telegram("✅ 操作尝试完成。", "result.png")
-
-    except Exception as e:
-        driver.save_screenshot("error.png")
-        send_telegram(f"❌ 自动化失败: {str(e)}", "error.png")
+        print("操作完成。")
+        
     finally:
         driver.quit()
 
