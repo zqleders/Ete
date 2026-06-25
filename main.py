@@ -21,11 +21,11 @@ def send_telegram(msg, image_path=None):
         requests.post(f"{base_url}sendMessage", data={"chat_id": TELEGRAM_CHAT_ID, "text": msg})
         if image_path and os.path.exists(image_path):
             with open(image_path, 'rb') as f:
-                requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
+                requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID, "files": {"photo": f}})
     except: pass
 
 def handle_unexpected_popups(driver):
-    """同时监测隐私弹窗和广告弹窗并进行处理"""
+    """监测隐私弹窗和广告并自动处理"""
     try:
         # 1. 监测隐私弹窗
         consent_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
@@ -39,19 +39,28 @@ def handle_unexpected_popups(driver):
         ad_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-rewarded-ad-button")
         for btn in ad_btns:
             if btn.is_displayed():
-                print("检测到观看广告选项，点击并播放...")
+                print("检测到观看广告，开始播放...")
                 driver.execute_script("arguments[0].click();", btn)
-                time.sleep(8) # 等待广告播放
+                
+                # 强制等待 30 秒，确保广告播完
+                print("已点击广告，强制等待 30 秒...")
+                time.sleep(30) 
+                
                 # 点击关闭按钮
-                close_btn = driver.find_element(By.ID, "dismiss-button-element")
-                if close_btn.is_displayed():
+                try:
+                    close_btn = driver.find_element(By.ID, "dismiss-button-element")
                     driver.execute_script("arguments[0].click();", close_btn)
-                    time.sleep(2)
+                    print("已点击关闭按钮。")
+                except:
+                    print("未找到关闭按钮，跳过。")
+                time.sleep(2)
     except Exception as e:
-        print(f"弹窗处理检测逻辑运行: {e}")
+        print(f"弹窗处理逻辑报错: {e}")
 
 def run_browser():
     chrome_options = Options()
+    # 窗口位置记录与设置
+    chrome_options.add_argument("--window-position=0,0") 
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
     chrome_options.add_argument(f'--load-extension={os.path.abspath("./extension")}')
     chrome_options.add_argument("--window-size=1920,1080")
@@ -65,7 +74,7 @@ def run_browser():
     wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 登录前处理
+        # 1. 登录流程
         driver.get("https://eternalzero.cloud/login")
         time.sleep(10)
         handle_unexpected_popups(driver)
@@ -80,7 +89,7 @@ def run_browser():
         print("等待详情页渲染...")
         time.sleep(15) 
         
-        # 再次检测，防止广告在后续步骤跳出
+        # 再次检测，防止广告跳出
         handle_unexpected_popups(driver)
         
         # 3. 验证人机状态
