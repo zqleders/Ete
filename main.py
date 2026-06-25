@@ -24,6 +24,19 @@ def send_telegram(msg, image_path=None):
                 requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
     except: pass
 
+def click_privacy_buttons(driver):
+    """主动检测并点击任何弹窗按钮，直接消除它"""
+    try:
+        # 查找所有可能代表“拒绝”或“关闭”的按钮
+        buttons = driver.find_elements(By.XPATH, "//button[contains(., 'Do not consent') or contains(., 'Reject') or contains(., 'Close') or contains(., 'Accept')]")
+        for btn in buttons:
+            if btn.is_displayed():
+                btn.click()
+                print("已成功点击弹窗按钮")
+                time.sleep(1)
+    except: 
+        pass
+
 def run_browser():
     chrome_options = Options()
     chrome_options.add_argument('--proxy-server=socks5://127.0.0.1:10808')
@@ -34,54 +47,44 @@ def run_browser():
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--lang=en-US")
-    chrome_options.add_argument("--timezone=America/New_York")
     
     driver = webdriver.Chrome(options=chrome_options)
     
-    # 伪装自动化特征
-    stealth(driver,
-            languages=["en-US", "en"],
-            vendor="Google Inc.",
-            platform="Win32",
-            webgl_vendor="Intel Inc.",
-            renderer="Intel Iris OpenGL Engine",
-            fix_hairline=True,
-            )
-
+    stealth(driver, languages=["en-US", "en"], vendor="Google Inc.", platform="Win32", fix_hairline=True)
     wait = WebDriverWait(driver, 20)
 
     try:
-        # 1. 预先注入 Cookie 绕过隐私弹窗
-        driver.get("https://eternalzero.cloud/")
-        driver.add_cookie({'name': 'cookies_accepted', 'value': 'true', 'domain': '.eternalzero.cloud'})
-        driver.add_cookie({'name': 'notice_gdpr_prefs', 'value': '0:1', 'domain': '.eternalzero.cloud'})
-        
-        # 2. 登录流程
+        # 1. 登录流程
         driver.get("https://eternalzero.cloud/login")
+        time.sleep(3)
+        click_privacy_buttons(driver) # 遇到就点
+        
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
 
-        # 3. 详情页处理
+        # 2. 详情页处理
         driver.get("https://eternalzero.cloud/servers/5541/info")
         print("等待页面加载...")
-        time.sleep(15) # 给插件初始化和页面渲染留出时间
+        time.sleep(10)
         
-        # 强制清理残留遮罩
-        driver.execute_script("document.querySelectorAll('.fc-dialog-overlay, .modal-backdrop').forEach(e => e.style.display='none')")
+        # 在处理人机验证前，先确保弹窗被点击掉
+        click_privacy_buttons(driver)
         
-        # 4. 人机验证与点击
+        # 3. 人机验证逻辑
         if "h-captcha" in driver.page_source:
             captcha_box = driver.find_element(By.CSS_SELECTOR, ".h-captcha")
             driver.execute_script("arguments[0].scrollIntoView();", captcha_box)
             print("等待插件自动处理验证...")
             time.sleep(10)
 
+        # 4. 尝试点击续费
+        # 再次执行一次，防止弹窗在最后时刻跳出
+        click_privacy_buttons(driver)
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
         time.sleep(5)
-        # 动态调整截图高度
         total_height = driver.execute_script("return document.body.scrollHeight")
         driver.set_window_size(1920, total_height)
         driver.save_screenshot("result.png")
