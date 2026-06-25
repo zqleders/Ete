@@ -1,13 +1,14 @@
 name: Server Automation
 
 on:
+  workflow_dispatch:
 #  schedule:
- #   - cron: '0 0 * * *' # 可选：设置定时运行，例如每天一次
-  workflow_dispatch:     # 允许手动触发
+#    - cron: '0 8 * * *'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -22,11 +23,80 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Tools (Chrome, Xvfb, jq)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable xvfb jq
+
       - name: Run automation
         env:
           EMAIL: ${{ secrets.EMAIL }}
           PASSWORD: ${{ secrets.PASSWORD }}
-          NOPECHA_KEY: ${{ secrets.NOPECHA_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+          PROXY_NODE: ${{ secrets.PROXY_NODE }} # 确保你在 Secrets 中添加了 PROXY_NODE
+          DISPLAY: :99
+        run: |
+          # 启动虚拟显示器
+          Xvfb :99 -screen 0 1920x1080x24 > /dev/null 2>&1 &
+          
+          # 1. 下载并安装最新的 Sing-box 核心
+          TAG=$(curl -s https://api.github.com/repos/SagerNet/sing-box/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+          VERSION=${TAG#v}
+          wget -q "https://github.com/SagerNet/sing-box/releases/download/${TAG}/sing-box-${VERSION}-linux-amd64.tar.gz"
+          tar -xzf "sing-box-${VERSION}-linux-amd64.tar.gz"
+          mv "sing-box-${VERSION}-linux-amd64/sing-box" . && chmod +x sing-box
+          
+          # 2. 自动化协议解析脚本 (核心逻辑)
+          python3 << 'PYEOF'
+          import os, json, base64
+          from urllib.parse import urlparse, parse_qs, unquote
+          def generate_singbox_config():
+              url = os.environ.get("PROXY_NODE", "").strip()
+              p = urlparse(url)
+              scheme = p.scheme.lower()
+              params = {k: v[0] for k, v in parse_qs(p.query).items()}
+              config = {"log": {"level": "info"}, "inbounds": [{"type": "socks", "tag": "socks-in", "listen": "127.0.0.1", "listen_port": 10808}], "outbounds": []}
+              raw_auth = unquote(p.netloc.split('@')[0] if '@' in p.netloc else "")
+              server = p.hostname
+              port = int(p.port or 443)
+              sni = params.get("sni", server)
+              outbound = {"tag": "proxy", "server": server, "server_port": port}
+              if scheme == "vless":
+                  outbound.update({"type": "vless", "uuid": raw_auth or p.username, "packet_encoding": "xudp", "tls": {"enabled": True, "server_name": sni, "insecure": True}})
+                  if params.get("type") == "ws": outbound["transport"] = {"type": "ws", "path": unquote(params.get("path", "/")), "headers": {"Host": sni}}
+                  if params.get("security") == "reality": outbound["tls"]["reality"] = {"enabled": True, "public_key": params.get("pbk", ""), "short_id": params.get("sid", "")}
+              elif scheme == "tuic":
+                  u, pwd = raw_auth.split(':', 1) if ':' in raw_auth else (raw_auth, "")
+                  outbound.update({"type": "tuic", "uuid": u, "password": pwd, "congestion_control": params.get("congestion_control", "cubic"), "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"], "insecure": True}})
+              elif scheme in ["hysteria2", "hy2"]:
+                  outbound.update({"type": "hysteria2", "password": raw_auth, "tls": {"enabled": True, "server_name": sni, "insecure": True}})
+              elif scheme == "vmess":
+                  try:
+                      content = url[8:].split("#")[0]
+                      vm = json.loads(base64.b64decode(content + "="*(4-len(content)%4)).decode())
+                      outbound.update({"type": "vmess", "server": vm['add'], "server_port": int(vm['port']), "uuid": vm['id'], "security": "auto"})
+                      if vm.get('tls') == "tls": outbound["tls"] = {"enabled": True, "server_name": vm.get('sni', vm['add']), "insecure": True}
+                  except: pass
+              config["outbounds"].append(outbound)
+              config["outbounds"].append({"type": "direct", "tag": "direct"})
+              return config
+          with open("config.json", "w") as f: json.dump(generate_singbox_config(), f, indent=2)
+          PYEOF
+          
+          # 3. 后台运行并等待握手
+          ./sing-box run -c config.json > proxy.log 2>&1 &
+          echo "[INFO] 正在等待代理建立连接 (15秒)..."
+          sleep 15
+          
+          # 4. 连通性最终验证
+          if curl -x socks5://127.0.0.1:10808 -s --max-time 15 https://www.google.com > /dev/null; then
+            echo "[INFO] ✅ 代理适配成功！"
+            echo "PROXY_SOCKS5=socks5://127.0.0.1:10808" >> $GITHUB_ENV
+          else
+            echo "[ERROR] ❌ 代理连接失败。"
+            exit 1
+          fi
+          
+          # 运行你的 Python 主程序
+          python main.py
