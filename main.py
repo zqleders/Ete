@@ -7,7 +7,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
-# GitHub Secrets 获取
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -21,26 +20,21 @@ def send_telegram(msg, image_path=None):
             requests.post(f"{base_url}sendPhoto", data={"chat_id": TELEGRAM_CHAT_ID}, files={"photo": f})
 
 def handle_privacy_popup(driver):
-    """更激进的遮罩清理：每调用一次都会尝试点击并移除 DOM"""
     try:
-        # 1. 点击所有可能的拒绝按钮（通过不同文本尝试）
-        buttons = driver.find_elements(By.XPATH, "//button[contains(., 'Do not consent') or contains(., 'Reject') or contains(., 'Close')]")
-        for btn in buttons:
-            if btn.is_displayed():
-                btn.click()
-                time.sleep(1)
-        
-        # 2. 暴力移除所有弹窗层和遮罩
+        # 统一处理所有弹窗
         driver.execute_script("""
-            var selectors = ['.fc-dialog-overlay', '.fc-dialog-container', '#privacy-modal', '.modal-backdrop', '.fade', '.show'];
+            var buttons = Array.from(document.querySelectorAll('button'));
+            buttons.forEach(function(btn) {
+                if(btn.innerText.includes('Do not consent') || btn.innerText.includes('Reject')) btn.click();
+            });
+            var selectors = ['.fc-dialog-overlay', '.fc-dialog-container', '.modal-backdrop'];
             selectors.forEach(function(s) {
                 var el = document.querySelector(s);
                 if (el) el.style.display = 'none';
             });
             document.body.style.overflow = 'auto';
         """)
-    except Exception as e:
-        pass
+    except: pass
 
 def run_browser():
     chrome_options = Options()
@@ -53,41 +47,37 @@ def run_browser():
     
     driver = webdriver.Chrome(options=chrome_options)
     driver.maximize_window()
-    wait = WebDriverWait(driver, 25)
+    wait = WebDriverWait(driver, 30)
 
     try:
-        # 1. 登录流程
+        # 1. 登录
         driver.get("https://eternalzero.cloud/login")
-        # 登录页特殊处理：等待页面稳定后多触发一次清理
-        time.sleep(3) 
+        time.sleep(5) # 给插件启动预留更多时间
         handle_privacy_popup(driver)
         
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
 
-        # 2. 列表页处理
+        # 2. 列表
         driver.get("https://eternalzero.cloud/servers/list")
-        time.sleep(2)
-        handle_privacy_popup(driver)
+        time.sleep(5)
         
-        if "5541" not in driver.page_source:
-            raise Exception("登录成功但未在列表中发现服务器 5541")
-
         # 3. 详情页处理
         driver.get("https://eternalzero.cloud/servers/5541/info")
-        time.sleep(3)
+        time.sleep(10) # 关键：给 hCaptcha 和插件加载预留足够时间
         handle_privacy_popup(driver)
         
-        # 执行点击
-        renew_btn = wait.until(EC.presence_of_element_located((By.ID, "renew-button")))
+        # 点击 Renew 按钮
+        renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
-        time.sleep(5)
+        time.sleep(8) # 等待验证码自动触发后的响应
+        
         total_height = driver.execute_script("return document.body.scrollHeight")
         driver.set_window_size(1920, total_height)
         driver.save_screenshot("result.png")
-        send_telegram("✅ 服务器续费请求已成功发送。", "result.png")
+        send_telegram("✅ 操作尝试完成，请查看截图确认状态。", "result.png")
 
     except Exception as e:
         driver.save_screenshot("error.png")
