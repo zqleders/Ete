@@ -8,7 +8,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium_stealth import stealth
 
-# 环境配置
+# 获取环境配置
 EMAIL = os.environ.get("EMAIL")
 PASSWORD = os.environ.get("PASSWORD")
 NOPECHA_KEY = os.environ.get("NOPECHA_KEY")
@@ -27,58 +27,54 @@ def send_telegram(msg, image_path=None):
         print(f"Telegram 发送失败: {e}")
 
 def solve_hcaptcha(driver):
-    """根据官方文档：POST 提交任务 -> GET 轮询状态 -> 注入响应"""
+    """严格遵循 NopeCHA API 文档逻辑"""
     print("正在检测人机验证...")
-    # 1. 查找验证码容器并提取必要参数
     captcha_elements = driver.find_elements(By.CLASS_NAME, "h-captcha")
-    if not captcha_elements:
-        print("未发现人机验证，跳过。")
-        return False
+    if not captcha_elements: return False
     
     sitekey = captcha_elements[0].get_attribute("data-sitekey")
-    url = driver.current_url
+    payload = {"key": NOPECHA_KEY, "type": "hcaptcha", "sitekey": sitekey, "url": driver.current_url}
     
-    # 2. 调用 POST 接口提交任务 (Reference: #postHcaptcha)
-    print(f"提交任务到 NopeCHA，Sitekey: {sitekey}")
-    payload = {"key": NOPECHA_KEY, "type": "hcaptcha", "sitekey": sitekey, "url": url}
+    # POST 提交任务
     resp = requests.post("https://api.nopecha.com/v1/solve", json=payload)
-    if resp.status_code != 200:
-        print(f"任务提交失败: {resp.text}")
-        return False
-    
+    if resp.status_code != 200: return False
     task_id = resp.json().get("data")
-    print(f"任务已提交，ID: {task_id}，开始轮询结果...")
-
-    # 3. 调用 GET 接口轮询状态 (Reference: #getHcaptcha)
+    
+    # GET 轮询状态
     for _ in range(30):
         time.sleep(3)
         res = requests.get(f"https://api.nopecha.com/v1/status?key={NOPECHA_KEY}&id={task_id}").json()
-        status = res.get("status")
-        if status == "solved":
+        if res.get("status") == "solved":
             token = res.get("data")
-            print("验证码识别成功，正在注入...")
-            # 注入 Token 并触发回调
             driver.execute_script(f'document.querySelector("[name=h-captcha-response]").value = "{token}";')
             driver.execute_script("hcaptcha.callback();")
+            print("人机验证通过。")
             return True
-        elif status == "failed":
-            print("验证码识别失败。")
-            return False
-    print("轮询超时。")
     return False
 
-def clean_ads(driver):
-    """清理页面广告"""
-    # 处理隐私弹窗
-    for btn in driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent"):
-        if btn.is_displayed(): driver.execute_script("arguments[0].click();", btn)
-    # 处理激励广告
+def handle_all_tasks(driver):
+    """处理隐私弹窗、看广告、人机验证的全套逻辑"""
+    # 1. 隐私对话框
+    consent_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-cta-consent")
+    for btn in consent_btns:
+        if btn.is_displayed():
+            driver.execute_script("arguments[0].click();", btn)
+            time.sleep(2)
+            
+    # 2. 看广告逻辑
     ad_btns = driver.find_elements(By.CSS_SELECTOR, "button.fc-rewarded-ad-button")
     if ad_btns and ad_btns[0].is_displayed():
+        print("发现广告，开始观看...")
         driver.execute_script("arguments[0].click();", ad_btns[0])
-        time.sleep(30)
+        time.sleep(30) # 强制等待广告完成
         close_btn = driver.find_elements(By.ID, "dismiss-button-element")
-        if close_btn: driver.execute_script("arguments[0].click();", close_btn[0])
+        if close_btn: 
+            driver.execute_script("arguments[0].click();", close_btn[0])
+            print("广告已关闭。")
+            time.sleep(2)
+            
+    # 3. 处理人机验证
+    solve_hcaptcha(driver)
 
 def run_browser():
     chrome_options = Options()
@@ -95,29 +91,24 @@ def run_browser():
     try:
         # 1. 登录
         driver.get("https://eternalzero.cloud/login")
+        handle_all_tasks(driver)
         wait.until(EC.presence_of_element_located((By.ID, "email"))).send_keys(EMAIL)
         driver.find_element(By.ID, "password").send_keys(PASSWORD)
         driver.find_element(By.XPATH, "//button[contains(., 'Sign in')]").click()
         time.sleep(10)
 
-        # 2. 访问 Info 页
+        # 2. Info页操作
         driver.get("https://eternalzero.cloud/servers/5541/info")
         time.sleep(10)
+        handle_all_tasks(driver)
         
-        # 3. 处理广告
-        clean_ads(driver)
-        
-        # 4. 严格按照 NopeCHA 文档处理人机验证
-        solve_hcaptcha(driver)
-        
-        # 5. 续费
+        # 3. 续费
         renew_btn = wait.until(EC.element_to_be_clickable((By.ID, "renew-button")))
         driver.execute_script("arguments[0].click();", renew_btn)
         
         time.sleep(5)
         driver.save_screenshot("result.png")
-        send_telegram("✅ 自动续费成功！", "result.png")
-        
+        send_telegram("✅ 所有任务完成（广告、验证、续费）。", "result.png")
     except Exception as e:
         driver.save_screenshot("error.png")
         send_telegram(f"❌ 自动化失败: {str(e)}", "error.png")
